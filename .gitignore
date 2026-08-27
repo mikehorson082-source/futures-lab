@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.local
+.DS_Store
+*.log
+*.sqlite
+data/
+*.parquet
+*.cbm
+*.joblib
+catboost_info/
+models/artifacts/
+.pytest_cache/
