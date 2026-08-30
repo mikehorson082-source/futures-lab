@@ -61,6 +61,16 @@ ROOT_SERIES = [
         "underlying_name": "Нефть Brent",
         "description": "Этап 2 — контанго/бэквордация от стоимости хранения, влияние мировых цен",
     },
+    {
+        "root_symbol": "CNYRUBF_PERP",
+        "basic_asset": "CNY/RUB",
+        "ticker_prefix": None,
+        "exact_ticker": "CNYRUBF",          # вечный фьючерс MOEX, не цепочка датированных контрактов —
+                                             # у API тикер вечного контракта совпадает с root-именем
+        "underlying_type": "currency_perp",   # ограничение схемы: String(16) в FuturesRoot.underlying_type
+        "underlying_name": "Юань/рубль (вечный фьючерс)",
+        "description": "Этап 5 — funding rate вместо конвергенции к экспирации, тот же актив, что Этап 1",
+    },
 ]
 
 
@@ -74,6 +84,18 @@ def _match_contracts(all_futures: List[Future], rule: dict) -> List[Future]:
     matched = []
     for f in all_futures:
         if f.basic_asset != rule["basic_asset"]:
+            continue
+        if rule.get("exact_ticker"):
+            # Вечный фьючерс: один конкретный тикер, а не цепочка контрактов.
+            # У API он тоже помечен expiration_date=2099-12-31 (то же поле, что
+            # у "синтетического мусора" ниже) — поэтому здесь порог года НЕ
+            # применяется, а вместо него точное совпадение тикера + explicit
+            # проверка real_exchange==1 (MOEX), чтобы не подцепить чужеродные
+            # "Neo"-перпетуалы брокера (exchange='spb_future', real_exchange=0),
+            # если у них когда-нибудь случайно совпадёт basic_asset.
+            if f.ticker != rule["exact_ticker"] or f.real_exchange != 1:
+                continue
+            matched.append(f)
             continue
         if rule["ticker_prefix"] and not f.ticker.startswith(rule["ticker_prefix"]):
             continue
