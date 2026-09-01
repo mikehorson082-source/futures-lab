@@ -49,6 +49,8 @@ def main(argv=None):
     parser.add_argument("--horizon-bars", type=int, default=20)
     parser.add_argument("--tp-vol-mult", type=float, default=2.0)
     parser.add_argument("--sl-vol-mult", type=float, default=1.0)
+    parser.add_argument("--side", type=int, default=1, choices=[1, -1],
+                        help="+1 лонг (TP выше входа), -1 шорт (зеркально, TP ниже)")
     parser.add_argument("--tag", default="",
                         help="суффикс выходного файла — чтобы варианты ширины барьеров "
                              "не затирали друг друга (например --tag _w8)")
@@ -61,13 +63,14 @@ def main(argv=None):
     rows = read_features_csv(in_path)
     by_ticker = group_by_ticker(rows)
     print(f"{args.root}: {len(rows)} баров, {len(by_ticker)} контрактов. "
-          f"Горизонт {args.horizon_bars} баров, TP={args.tp_vol_mult}xvol, SL={args.sl_vol_mult}xvol.")
+          f"Горизонт {args.horizon_bars} баров, TP={args.tp_vol_mult}xvol, SL={args.sl_vol_mult}xvol, "
+          f"сторона {'ЛОНГ' if args.side == 1 else 'ШОРТ'}.")
 
     labels_by_ticker = {}
     for ticker, bars in by_ticker.items():
         labels = scan_barriers(
             bars, horizon_bars=args.horizon_bars,
-            tp_vol_mult=args.tp_vol_mult, sl_vol_mult=args.sl_vol_mult,
+            tp_vol_mult=args.tp_vol_mult, sl_vol_mult=args.sl_vol_mult, side=args.side,
         )
         compute_uniqueness_weights(labels, n_bars=len(bars))
         labels_by_ticker[ticker] = labels

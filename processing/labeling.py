@@ -43,6 +43,7 @@ def scan_barriers(
     tp_vol_mult: float = 2.0,
     sl_vol_mult: float = 1.0,
     require_full_horizon: bool = True,
+    side: int = 1,
 ) -> List[dict]:
     """
     bars — бары ОДНОГО контракта, отсортированные по времени, с полями
@@ -53,7 +54,19 @@ def scan_barriers(
     Бары без volatility_20 (прогрев окна на первых барах контракта) и,
     если require_full_horizon=True, бары у которых не хватает полного
     окна вперёд до конца истории контракта — пропускаются (не размечены).
+
+    side=+1 — ЛОНГ: TP выше цены входа (+tp_vol_mult*vol, касается high),
+    SL ниже (-sl_vol_mult*vol, касается low).
+    side=-1 — ШОРТ, ЗЕРКАЛЬНО: TP ниже (-tp_vol_mult*vol, касается low),
+    SL выше (+sl_vol_mult*vol, касается high), доходность со знаком минус.
+
+    Зачем нужна отдельная зеркальная разметка, а не "перевёрнутая
+    вероятность лонговой модели": барьеры асимметричны (TP вдвое дальше
+    SL), поэтому исход "SL сработал первым" означает движение вдвое
+    МЕНЬШЕГО размера, чем TP. Торговать его в шорт — ловить половинное
+    движение при тех же издержках на сделку (plan.md, раздел 25).
     """
+    assert side in (1, -1), "side: +1 лонг, -1 шорт"
     n = len(bars)
     out = []
 
@@ -66,13 +79,17 @@ def scan_barriers(
 
         last = min(i + horizon_bars, n - 1)
         entry_close = bars[i]["close"]
-        tp_level = entry_close * (1 + vol * tp_vol_mult)
-        sl_level = entry_close * (1 - vol * sl_vol_mult)
+        tp_level = entry_close * (1 + side * vol * tp_vol_mult)
+        sl_level = entry_close * (1 - side * vol * sl_vol_mult)
 
         exit_idx, exit_reason, exit_price = None, None, None
         for j in range(i + 1, last + 1):
-            hit_sl = bars[j]["low"] <= sl_level
-            hit_tp = bars[j]["high"] >= tp_level
+            if side == 1:
+                hit_sl = bars[j]["low"] <= sl_level
+                hit_tp = bars[j]["high"] >= tp_level
+            else:
+                hit_sl = bars[j]["high"] >= sl_level
+                hit_tp = bars[j]["low"] <= tp_level
             if hit_sl:
                 exit_idx, exit_reason, exit_price = j, "sl", sl_level
                 break
@@ -88,7 +105,7 @@ def scan_barriers(
         row["exit_price"] = exit_price
         row["exit_reason"] = exit_reason
         row["bars_held"] = exit_idx - i
-        row["ret_gross"] = (exit_price - entry_close) / entry_close
+        row["ret_gross"] = side * (exit_price - entry_close) / entry_close
         row["event_idx"] = i
         row["exit_idx"] = exit_idx
         out.append(row)

@@ -38,8 +38,13 @@ from scripts.final_eval import MKT, fit
 COMMISSION_BP = 0.5  # биржевая+брокерская комиссия, круговая, оценка
 
 
-def roll_spreads(root: str, since: str) -> pd.Series:
+def roll_spreads(root: str, since: str, until: str = None) -> pd.Series:
     """Эффективный круговой спред по контрактам, оценка Roll на минутных свечах.
+
+    Окно [since, until) должно совпадать с периодом, в котором происходят
+    сделки: спред контракта меняется по ходу его жизни (в молодости, пока
+    он дальний, он в разы шире, чем когда становится ближним). Оценка по
+    всей истории контракта завысила бы издержки его активного периода.
 
     Roll предполагает тиковые сделки; на минутных свечах оценка смещена
     ВВЕРХ (в отрицательную автокорреляцию попадает и настоящий возврат к
@@ -49,8 +54,9 @@ def roll_spreads(root: str, since: str) -> pd.Series:
     q = """SELECT c.ticker, fc.time, fc.close FROM futures_candles fc
            JOIN futures_contracts c ON c.figi = fc.figi
            WHERE c.root_symbol = :root AND fc.time >= :since
+             AND (:until IS NULL OR fc.time < CAST(:until AS timestamptz))
            ORDER BY c.ticker, fc.time"""
-    d = pd.read_sql(text(q), engine, params={"root": root, "since": since})
+    d = pd.read_sql(text(q), engine, params={"root": root, "since": since, "until": until})
     out = {}
     for t, g in d.groupby("ticker"):
         r = np.diff(np.log(g["close"].astype(float).values))
@@ -61,8 +67,12 @@ def roll_spreads(root: str, since: str) -> pd.Series:
     return pd.Series(out, name="spread_bp")
 
 
-def build_trades(te, proba, thr, min_volume_share=0.0):
-    """Хронологический отбор сигналов с правилом одной позиции за раз."""
+def build_trades(te, proba, thr, min_volume_share=0.0, side=1):
+    """Хронологический отбор сигналов с правилом одной позиции за раз.
+
+    side=+1 лонг, -1 шорт: у шорта прибыль даёт ПАДЕНИЕ цены, поэтому
+    доходность считается зеркально (иначе знак был бы перевёрнут).
+    """
     d = te.copy()
     d["p"] = proba
     d = d.sort_values(["ticker", "time"])
@@ -78,7 +88,7 @@ def build_trades(te, proba, thr, min_volume_share=0.0):
         trades.append({
             "entry_time": r.entry_time, "exit_time": r.t1, "ticker": r.ticker,
             "reason": r.exit_reason,
-            "ret_gross": (r.exit_price - r.entry_price) / r.entry_price,
+            "ret_gross": side * (r.exit_price - r.entry_price) / r.entry_price,
         })
         free_at = r.t1
     return pd.DataFrame(trades)
@@ -139,6 +149,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="CNYRUBF")
     ap.add_argument("--tag", default="", help="вариант ширины барьеров, см. build_labels --tag")
+    ap.add_argument("--side", type=int, default=1, choices=[1, -1],
+                    help="сторона сделки; должна совпадать со стороной разметки")
     ap.add_argument("--top-pct", type=float, default=10.0)
     ap.add_argument("--min-volume-share", type=float, default=0.0,
                     help="фильтр ликвидности; по умолчанию ВЫКЛЮЧЕН — walk-forward "
@@ -154,8 +166,8 @@ def main():
     trf = tr.dropna(subset=MKT + ["target"])
     thr = np.percentile(model.predict_proba(trf[MKT])[:, 1], 100 - a.top_pct)
 
-    since = str(te["time"].min().date())
-    sp = roll_spreads(a.root, since)
+    # окно оценки спреда = окно сделок (см. docstring roll_spreads)
+    sp = roll_spreads(a.root, str(te["time"].min().date()), str(te["time"].max().date()))
     cost_map = (sp + COMMISSION_BP).to_dict()
     print("оценка круговых издержек по контрактам (Roll + комиссия), б.п.:")
     print("  " + ", ".join(f"{k} {v:.2f}" for k, v in sorted(cost_map.items(), key=lambda x: x[1])))
@@ -170,10 +182,10 @@ def main():
     print(f"\nпериод test: {days[0].date()} .. {days[-1].date()} ({years:.2f} года), "
           f"безрисковая (ключевая ставка ЦБ) {rf_годовых*100:.2f}% годовых")
 
-    all_tr = build_trades(te, proba, thr, 0.0)
+    all_tr = build_trades(te, proba, thr, 0.0, a.side)
     report("БЕЗ фильтра ликвидности (все контракты)", all_tr, days, rf_daily, cost_map, years, rf_годовых)
 
-    liq_tr = build_trades(te, proba, thr, a.min_volume_share)
+    liq_tr = build_trades(te, proba, thr, a.min_volume_share, a.side)
     report(f"С фильтром ликвидности (volume_share >= {a.min_volume_share})",
            liq_tr, days, rf_daily, cost_map, years, rf_годовых)
 
@@ -187,7 +199,7 @@ def main():
     rng = np.random.default_rng(0)
     ctrl = []
     for _ in range(5):
-        t = build_trades(te, rng.permutation(proba), thr, a.min_volume_share)
+        t = build_trades(te, rng.permutation(proba), thr, a.min_volume_share, a.side)
         c = t["ticker"].map(cost_map).fillna(0)
         ctrl.append((t["ret_gross"] * 1e4 - c).mean())
     print(f"\nконтроль (перемешанные вероятности, 5 прогонов): чистая "

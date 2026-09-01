@@ -36,6 +36,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="CNYRUBF")
     ap.add_argument("--tag", default="", help="вариант ширины барьеров, см. build_labels --tag")
+    ap.add_argument("--side", type=int, default=1, choices=[1, -1])
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--top-pct", type=float, default=10.0)
     ap.add_argument("--min-volume-share", type=float, default=0.5)
@@ -44,8 +45,6 @@ def main():
 
     df = pd.read_csv(f"data/features/{a.root}_train{a.tag}_v2.csv", parse_dates=["time", "t1"])
     df = df.dropna(subset=MKT + ["target"])
-    sp = roll_spreads(a.root, str(df["time"].min().date()))
-    cost_map = (sp + COMMISSION_BP).to_dict()
 
     t_min, t_max = df["time"].min(), df["time"].max()
     span = t_max - t_min
@@ -59,11 +58,13 @@ def main():
         tr = df[(df["time"] < lo) & (df["t1"] < lo) & (df["time"] < lo - embargo)]
         if len(tr) < 2000 or len(te) < 500 or te["target"].nunique() < 2:
             continue
+        cost_map = (roll_spreads(a.root, str(te["time"].min().date()),
+                                 str(te["time"].max().date())) + COMMISSION_BP).to_dict()
         m = fit(MKT, tr)
         thr = np.percentile(m.predict_proba(tr[MKT])[:, 1], 100 - a.top_pct)
         proba = m.predict_proba(te[MKT])[:, 1]
         for tag, mvs in (("все контракты", 0.0), ("ликвидные", a.min_volume_share)):
-            t = build_trades(te, proba, thr, mvs)
+            t = build_trades(te, proba, thr, mvs, a.side)
             if not len(t):
                 continue
             n = net_bp(t, cost_map).dropna()

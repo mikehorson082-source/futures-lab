@@ -299,6 +299,41 @@ baseline без тега:
 .venv/bin/python -m scripts.analyze_test_subperiods --root CNYRUBF   # раздел 15 журнала
 ```
 
+### 2.7 Шорт-сторона и совместная стратегия лонг+шорт (раздел 25 журнала)
+
+Шорт — это ОТДЕЛЬНАЯ разметка (`side=-1` в `processing/labeling.py`, зеркально
+к лонгу — не разворот вероятности лонговой модели, барьеры асимметричны).
+`build_dataset.py` не умеет `--side`, поэтому для шорта шаги 2-4 пайплайна
+раздела 1.6 запускаются вручную по отдельности:
+
+```bash
+.venv/bin/python -m scripts.build_labels --root CNYRUBF --tag _w4s --side -1 \
+    --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+.venv/bin/python -m scripts.build_split --root CNYRUBF --tag _w4s
+.venv/bin/python -m scripts.build_derived_features --root CNYRUBF --tag _w4s
+```
+
+Даёт `CNYRUBF_train_w4s_v2.csv` / `CNYRUBF_test_w4s_v2.csv` — те же бары
+(`_bars_features.csv` из 1.6, шаг 1), что и у лонга, просто с зеркальной
+разметкой TP/SL.
+
+Затем совместная стратегия:
+```bash
+.venv/bin/python -m scripts.backtest_long_short --root CNYRUBF
+```
+* **Файл:** `scripts/backtest_long_short.py`. По умолчанию — walk-forward
+  внутри train (5 окон), печатает раздельно «только лонг» / «только шорт» /
+  «лонг+шорт» (одна позиция за раз, хронологически более ранний сигнал
+  побеждает независимо от стороны). Test не открывает.
+* **Test — один раз, явным флагом:**
+  ```bash
+  .venv/bin/python -m scripts.backtest_long_short --root CNYRUBF --test
+  ```
+
+`scripts/backtest.py` и `scripts/backtest_walkforward.py` тоже умеют шорт
+через `--side -1` (доходность считается зеркально), но это одиночная
+сторона — совместную лонг+шорт линию считает только `backtest_long_short.py`.
+
 ---
 
 ## 3. 🗺️ Roadmap — ещё не реализовано
