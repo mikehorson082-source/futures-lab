@@ -31,9 +31,10 @@ def main(argv=None):
              "использовалась при train-only калибровке порога dollar bars.",
     )
     parser.add_argument("--embargo-fraction", type=float, default=0.01)
+    parser.add_argument("--tag", default="", help="суффикс файлов варианта разметки (см. build_labels --tag)")
     args = parser.parse_args(argv)
 
-    in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_labeled.csv"
+    in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_labeled{args.tag}.csv"
     if not in_path.exists():
         raise SystemExit(f"Нет файла {in_path} — сначала запусти scripts.build_labels --root {args.root}")
 
@@ -81,7 +82,7 @@ def main(argv=None):
 
     out_dir = in_path.parent
     for name, subset in (("train", train), ("test", test)):
-        out_path = out_dir / f"{args.root}_{name}.csv"
+        out_path = out_dir / f"{args.root}_{name}{args.tag}.csv"
         with open(out_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=OUT_COLUMNS)
             writer.writeheader()

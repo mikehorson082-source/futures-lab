@@ -198,3 +198,64 @@ FEATURE_COLUMNS = [
     "basis_pct_rub_only", "basis_pct_full",
     "log_return_1", "volatility_20", "momentum_10",
 ]
+
+
+# ------------------------------------------------- производные (стационарные)
+#
+# Признаки выше — УРОВНИ (сырой базис, сырая волатильность, сырые дни до
+# экспирации). Проверка adversarial validation (plan.md, раздел 20) показала:
+# распределения уровней между train и test различимы с AUC 0.96 — модель,
+# обученная на одном режиме, применяется к другому и экстраполирует вслепую.
+#
+# Ниже — те же величины, переведённые в ОТНОСИТЕЛЬНЫЕ единицы: "насколько
+# текущее значение необычно относительно недавнего прошлого", а не "чему оно
+# равно". Все окна причинные (rolling по прошлым барам, current бар включён,
+# будущее не используется) и считаются ВНУТРИ КОНТРАКТА — окно не
+# перепрыгивает через ролл, как и у ценовых признаков выше.
+
+DERIVED_FEATURES = [
+    "basis_z",        # z-score базиса по скользящему окну своего контракта
+    "basis_chg_20",   # изменение базиса за 20 баров (разность — стационарна)
+    "vol_ratio",      # log(volatility_20 / её скользящая медиана) — режим вола
+    "ret_1_z",        # log_return_1 в единицах текущей волатильности
+    "mom_10_z",       # momentum_10 в единицах сигмы (нормировка на sqrt(10))
+    "mom_50_z",       # то же на более длинном окне — раздел 14 (momentum_10
+                      # почти не работал, возможно окно слишком короткое)
+]
+
+
+def add_derived_features(df, window: int = 250, min_periods: int = 60):
+    """Добавляет DERIVED_FEATURES в pandas-таблицу признаков (in place → df).
+
+    df должен быть отсортирован по (ticker, time) и содержать колонки
+    basis_pct_full, volatility_20, log_return_1, momentum_10.
+    """
+    import numpy as np
+
+    df = df.sort_values(["ticker", "time"]).reset_index(drop=True)
+    g = df.groupby("ticker", sort=False)
+
+    roll = lambda col, fn: g[col].transform(
+        lambda s: getattr(s.rolling(window, min_periods=min_periods), fn)()
+    )
+
+    basis_mean = roll("basis_pct_full", "mean")
+    basis_std = roll("basis_pct_full", "std")
+    # std ~ 0 (базис стоит на месте) дал бы бесконечный z — такие бары в NaN.
+    basis_std = basis_std.where(basis_std > 1e-9)
+    df["basis_z"] = ((df["basis_pct_full"] - basis_mean) / basis_std).clip(-10, 10)
+
+    df["basis_chg_20"] = g["basis_pct_full"].transform(lambda s: s - s.shift(20))
+
+    vol_med = roll("volatility_20", "median")
+    vol_med = vol_med.where(vol_med > 1e-12)
+    df["vol_ratio"] = np.log(df["volatility_20"] / vol_med).clip(-5, 5)
+
+    vol = df["volatility_20"].where(df["volatility_20"] > 1e-12)
+    df["ret_1_z"] = (df["log_return_1"] / vol).clip(-10, 10)
+    df["mom_10_z"] = (df["momentum_10"] / (vol * math.sqrt(10))).clip(-10, 10)
+
+    mom_50 = g["log_return_1"].transform(lambda s: s.rolling(50, min_periods=50).sum())
+    df["mom_50_z"] = (mom_50 / (vol * math.sqrt(50))).clip(-10, 10)
+
+    return df

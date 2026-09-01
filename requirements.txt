@@ -9,3 +9,7 @@ t-tech-investments==1.49.3
 # Ставка Китая (Этап 1, db/sync_reference_data.py) — тянет pandas/numpy/lxml/
 # curl-cffi/mini-racer как транзитивные зависимости, см. докстринг файла.
 akshare==1.18.94
+# Первая модель (Этап 1, scripts/train_baseline_model.py)
+scikit-learn==1.7.2
+# Градиентный бустинг для сравнения (Этап 1, scripts/train_catboost_model.py)
+catboost==1.2.10

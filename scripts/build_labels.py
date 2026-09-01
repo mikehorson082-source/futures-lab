@@ -49,6 +49,9 @@ def main(argv=None):
     parser.add_argument("--horizon-bars", type=int, default=20)
     parser.add_argument("--tp-vol-mult", type=float, default=2.0)
     parser.add_argument("--sl-vol-mult", type=float, default=1.0)
+    parser.add_argument("--tag", default="",
+                        help="суффикс выходного файла — чтобы варианты ширины барьеров "
+                             "не затирали друг друга (например --tag _w8)")
     args = parser.parse_args(argv)
 
     in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_features.csv"
@@ -107,7 +110,7 @@ def main(argv=None):
           f"1/{stats['mean_overlap']+1:.1f} ≈ {1/(stats['mean_overlap']+1):.3f} ожидаемо близко к mean-весу)")
 
     out_columns = FEATURE_COLUMNS + LABEL_COLUMNS
-    out_path = in_path.parent / f"{args.root}_bars_labeled.csv"
+    out_path = in_path.parent / f"{args.root}_bars_labeled{args.tag}.csv"
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=out_columns)
         writer.writeheader()
