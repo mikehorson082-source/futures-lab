@@ -7,7 +7,7 @@ load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
-# Отдельная база в том же инстансе TimescaleDB, что и ../agent (trading_db) —
+# Отдельная база в общем инстансе TimescaleDB (контейнер trading-db) —
 # решение зафиксировано в CLAUDE.md: своя БД, тот же сервер.
 DB_NAME = os.getenv("DB_NAME", "futures_lab")
 DB_USER = os.getenv("DB_USER", "postgres")

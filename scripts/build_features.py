@@ -24,7 +24,14 @@ from sqlalchemy import text
 
 from db.calendar import get_trading_day_segments
 from db.database import engine
-from processing.bars import assign_segments, build_dollar_bars, calibrate_threshold, get_contract_candles
+from processing.bars import (
+    DEFAULT_DTE_BUCKETS,
+    assign_segments,
+    build_dollar_bars,
+    calibrate_threshold_curve,
+    get_contract_candles,
+    thresholds_for_contract,
+)
 from processing.features import (
     FEATURE_COLUMNS,
     add_basis_features,
@@ -35,6 +42,7 @@ from processing.features import (
     get_contracts_meta,
     load_basis_inputs,
 )
+from processing.splitting import compute_split_time, get_root_time_range
 
 
 def get_contracts(root_symbol: str):
@@ -50,6 +58,11 @@ def main():
     parser.add_argument("--root", required=True)
     parser.add_argument("--target-bars-per-day", type=int, default=30)
     parser.add_argument("--min-candles", type=int, default=50)
+    parser.add_argument(
+        "--test-fraction", type=float, default=0.2,
+        help="ДОЛЖНО совпадать с --test-fraction в scripts/build_split.py — иначе порог "
+             "dollar bars и реальный train/test разрез будут calibровать/резать по разным границам.",
+    )
     args = parser.parse_args()
     root = args.root
 
@@ -57,20 +70,43 @@ def main():
     segments = get_trading_day_segments(root)
     contracts_meta = get_contracts_meta(root)
     meta_by_ticker = {m["ticker"]: m for m in contracts_meta}
-    print(f"{root}: {len(contracts)} контрактов, {len(segments)} торговых сегментов в календаре.")
 
-    # 1. Бары на каждый контракт отдельно (processing/bars.py)
-    bars_by_ticker = {}
+    t_min, t_max = get_root_time_range(root)
+    split_time = compute_split_time(t_min, t_max, args.test_fraction)
+    print(f"{root}: {len(contracts)} контрактов, {len(segments)} торговых сегментов в календаре.")
+    print(f"Граница train/test (для калибровки порога): {split_time} "
+          f"(test_fraction={args.test_fraction}, ДОЛЖНА совпадать с scripts.build_split).")
+
+    # 1. Бары на каждый контракт отдельно (processing/bars.py). Порог
+    # калибруется ТОЛЬКО по train-периоду (до split_time) — раздел 10.1/12 plan.md.
+    candles_by_ticker, seg_ids_by_ticker = {}, {}
     for c in contracts:
         candles = get_contract_candles(c.figi)
         if len(candles) < args.min_candles:
             continue
         times = [t for t, _, _ in candles]
-        seg_ids = assign_segments(times, segments)
-        threshold = calibrate_threshold(candles, seg_ids, args.target_bars_per_day)
-        if threshold is None:
-            continue
-        bars_by_ticker[c.ticker] = build_dollar_bars(candles, seg_ids, threshold)
+        candles_by_ticker[c.ticker] = candles
+        seg_ids_by_ticker[c.ticker] = assign_segments(times, segments)
+
+    expiration_by_ticker = {m["ticker"]: m["expiration_date"] for m in contracts_meta}
+    bucket_thresholds = calibrate_threshold_curve(
+        candles_by_ticker, seg_ids_by_ticker, expiration_by_ticker,
+        args.target_bars_per_day, before=split_time,
+    )
+    bucket_labels = [f"<= {DEFAULT_DTE_BUCKETS[0]}д"] + [
+        f"{DEFAULT_DTE_BUCKETS[i-1]}-{DEFAULT_DTE_BUCKETS[i]}д" for i in range(1, len(DEFAULT_DTE_BUCKETS))
+    ] + [f"> {DEFAULT_DTE_BUCKETS[-1]}д"]
+    print("Порог dollar bars по бакетам days_to_expiration (train-период, пул всех контрактов):")
+    for label, thr in zip(bucket_labels, bucket_thresholds):
+        print(f"  {label:<10} {thr:,.0f} руб" if thr is not None else f"  {label:<10} (нет train-данных вообще)")
+
+    bars_by_ticker = {}
+    for ticker, candles in candles_by_ticker.items():
+        exp = expiration_by_ticker[ticker]
+        per_candle_thresholds = thresholds_for_contract(candles, exp, bucket_thresholds)
+        if any(t is None for t in per_candle_thresholds):
+            continue  # ни одного train-дня ни у кого в этом бакете — контракт пропущен
+        bars_by_ticker[ticker] = build_dollar_bars(candles, seg_ids_by_ticker[ticker], per_candle_thresholds)
     total_bars = sum(len(b) for b in bars_by_ticker.values())
     print(f"Баров построено: {total_bars} по {len(bars_by_ticker)} контрактам.")
 

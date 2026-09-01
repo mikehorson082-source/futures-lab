@@ -35,7 +35,7 @@ ROOT_SERIES = [
         "ticker_prefix": None,
         "underlying_type": "share",
         "underlying_name": "Сбербанк (обыкновенные акции)",
-        "description": "Этап 4 — фьючерс на акцию, сравнение с моделью акций из ../agent",
+        "description": "Этап 4 — фьючерс на акцию",
     },
     {
         "root_symbol": "CNYRUBF",

@@ -11,8 +11,7 @@ from db.models import FuturesRoot, FuturesContract
 def init_timescale():
     """
     Инициализирует расширение TimescaleDB в базе futures_lab, создаёт
-    гипертаблицу futures_candles и continuous aggregates для M15/H1/1D —
-    аналог ../agent/db/init_timescale.py, но для фьючерсов.
+    гипертаблицу futures_candles и continuous aggregates для M15/H1/1D.
     """
     print("🚀 1. Инициализация базы данных и расширений...")
     with engine.connect() as conn:

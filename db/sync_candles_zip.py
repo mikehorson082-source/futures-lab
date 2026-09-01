@@ -25,8 +25,7 @@ TINKOFF_TOKEN = os.getenv("TINKOFF_SANDBOX_TOKEN") or os.getenv("TINKOFF_TOKEN")
 def download_candles_zip(figi: str, year: int, token: str, max_retries: int = 3, timeout_sec: int = 120) -> Optional[bytes]:
     """
     Скачивает ZIP-архив минутных свечей за указанный год через T-Bank History REST API.
-    Идентично ../agent/db/sync_candles_zip.py — эндпоинт один и тот же для любого figi,
-    акция это или фьючерс.
+    Эндпоинт один и тот же для любого figi, акция это или фьючерс.
     """
     url = f"https://invest-public-api.tbank.ru/history-data?figi={figi}&year={year}"
     cmd = [
