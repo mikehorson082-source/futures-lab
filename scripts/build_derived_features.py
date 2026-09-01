@@ -19,11 +19,11 @@ import pandas as pd
 from processing.features import DERIVED_FEATURES, add_derived_features
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--root", default="CNYRUBF")
     p.add_argument("--tag", default="")
-    a = p.parse_args()
+    a = p.parse_args(argv)
 
     full = pd.read_csv(f"data/features/{a.root}_bars_labeled{a.tag}.csv", parse_dates=["time"])
     full = add_derived_features(full)
