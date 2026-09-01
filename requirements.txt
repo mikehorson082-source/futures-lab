@@ -6,3 +6,6 @@ SQLAlchemy==2.0.51
 psycopg2-binary==2.9.12
 deprecation==2.1.0
 t-tech-investments==1.49.3
+# Ставка Китая (Этап 1, db/sync_reference_data.py) — тянет pandas/numpy/lxml/
+# curl-cffi/mini-racer как транзитивные зависимости, см. докстринг файла.
+akshare==1.18.94

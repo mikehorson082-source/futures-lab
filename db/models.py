@@ -154,6 +154,68 @@ class TradingSchedule(Base):
         return f"<TradingSchedule(date='{self.date}', is_trading_day={self.is_trading_day})>"
 
 
+class CurrencyRate(Base):
+    """
+    Дневной спот-курс валютной пары с биржи (MOEX ISS), не фьючерс.
+    Нужен для разбора базиса на Этапе 1 (CLAUDE.md) — базис считается
+    относительно спота, а не относительно другого фьючерса.
+    """
+
+    __tablename__ = "currency_rates"
+
+    date = Column(Date, primary_key=True)
+    pair = Column(String(16), primary_key=True)   # 'CNYRUB', позже 'USDRUB' и т.п.
+    source = Column(String(16), nullable=False)   # 'moex_iss' — источник ряда, см. db/sync_reference_data.py
+    open = Column(Numeric(18, 6), nullable=True)
+    high = Column(Numeric(18, 6), nullable=True)
+    low = Column(Numeric(18, 6), nullable=True)
+    close = Column(Numeric(18, 6), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<CurrencyRate(pair='{self.pair}', date='{self.date}', close={self.close})>"
+
+
+class CbrKeyRate(Base):
+    """
+    Ключевая ставка ЦБ РФ по датам ДЕЙСТВИЯ (не объявления решения) —
+    источник: SOAP-сервис CBR DailyInfo, см. db/sync_reference_data.py.
+    Разница дат объявления и действия — до нескольких дней, использование
+    даты объявления было бы утечкой из будущего.
+    """
+
+    __tablename__ = "cbr_key_rate"
+
+    date = Column(Date, primary_key=True)
+    rate = Column(Numeric(6, 3), nullable=False)  # процент годовых
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<CbrKeyRate(date='{self.date}', rate={self.rate})>"
+
+
+class ForeignKeyRate(Base):
+    """
+    Ставка иностранного ЦБ/денежного рынка. `series` — часть первичного
+    ключа (не просто метаданные): для одной страны может быть несколько
+    несовпадающих рядов (например, LPR и SHIBOR для Китая) — это разные
+    показатели, не дубли одного и того же, поэтому оба должны иметь право
+    сосуществовать в таблице одновременно. См. db/sync_reference_data.py.
+    """
+
+    __tablename__ = "foreign_key_rates"
+
+    date = Column(Date, primary_key=True)
+    country = Column(String(8), primary_key=True)    # 'CN'
+    series = Column(String(32), primary_key=True)     # 'akshare_shibor_1y', 'akshare_lpr_1y'
+    rate = Column(Numeric(6, 3), nullable=False)       # процент годовых
+    source = Column(String(16), nullable=False)        # 'akshare'
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ForeignKeyRate(country='{self.country}', series='{self.series}', date='{self.date}', rate={self.rate})>"
+
+
 class FuturesCandle1D(Base):
     """TimescaleDB Continuous Aggregate витрина: таймфрейм 1 день."""
 
