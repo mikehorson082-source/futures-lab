@@ -43,13 +43,13 @@ def group_by_ticker(rows):
     return g
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Triple Barrier поверх уже построенных баров/признаков.")
     parser.add_argument("--root", required=True)
     parser.add_argument("--horizon-bars", type=int, default=20)
     parser.add_argument("--tp-vol-mult", type=float, default=2.0)
     parser.add_argument("--sl-vol-mult", type=float, default=1.0)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_features.csv"
     if not in_path.exists():

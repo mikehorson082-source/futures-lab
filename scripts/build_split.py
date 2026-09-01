@@ -22,7 +22,7 @@ from processing.splitting import compute_split_time, get_root_time_range, purge_
 OUT_COLUMNS = FEATURE_COLUMNS + LABEL_COLUMNS
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Train/test-разбиение с purge/embargo.")
     parser.add_argument("--root", required=True)
     parser.add_argument(
@@ -31,7 +31,7 @@ def main():
              "использовалась при train-only калибровке порога dollar bars.",
     )
     parser.add_argument("--embargo-fraction", type=float, default=0.01)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_labeled.csv"
     if not in_path.exists():

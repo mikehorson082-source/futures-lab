@@ -53,7 +53,7 @@ def get_contracts(root_symbol: str):
         ).fetchall()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Строит dollar bars + признаки для root-серии, сохраняет в data/features/.")
     parser.add_argument("--root", required=True)
     parser.add_argument("--target-bars-per-day", type=int, default=30)
@@ -63,7 +63,7 @@ def main():
         help="ДОЛЖНО совпадать с --test-fraction в scripts/build_split.py — иначе порог "
              "dollar bars и реальный train/test разрез будут calibровать/резать по разным границам.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     root = args.root
 
     contracts = get_contracts(root)
