@@ -6,6 +6,7 @@ from sqlalchemy import (
     Numeric,
     Boolean,
     BigInteger,
+    SmallInteger,
     DateTime,
     Date,
     Text,
@@ -83,6 +84,17 @@ class FuturesCandle(Base):
     low = Column(Numeric(18, 9), nullable=False)
     close = Column(Numeric(18, 9), nullable=False)
     volume = Column(BigInteger, nullable=False)
+    # Источник свечи по бирже, из t_tech.invest.schemas.CandleSource
+    # (1=EXCHANGE, 2=DEALER_WEEKEND, 3=INCLUDE_WEEKEND). Для строк из ZIP
+    # проставляется вручную как EXCHANGE (см. ingest_source ниже и
+    # plan.md, раздел 7.4 — решение принято после выборочной проверки
+    # через gRPC, не построчно).
+    candle_source = Column(SmallInteger, nullable=True)
+    # Какой наш загрузчик записал строку: 'zip' (db/sync_candles_zip.py,
+    # архивы history-data) или 'grpc' (будущая догрузка через
+    # GetCandles). Не про биржу, а про наш пайплайн — чтобы всегда можно
+    # было понять, откуда взялась конкретная строка.
+    ingest_source = Column(String(16), nullable=True)
 
     __table_args__ = (PrimaryKeyConstraint("time", "figi"),)
 
@@ -118,6 +130,28 @@ class FuturesCandleH1(Base):
     low = Column(Numeric(18, 9), nullable=False)
     close = Column(Numeric(18, 9), nullable=False)
     volume = Column(BigInteger, nullable=False)
+
+
+class TradingSchedule(Base):
+    """
+    Календарь торговых дней FORTS — по свечам, а не по расписанию биржи.
+    См. CLAUDE.md / plan.md (раздел про календарь): ни ISS `dailytable`,
+    ни T-Invest `trading_schedules` не дают полной и надёжной истории для
+    срочного рынка (первый неполон, второй не смотрит в прошлое вообще) —
+    поэтому источник истины здесь — фактическое наличие свечей, а
+    задокументированные даты смены режима биржи используются как
+    проверка результата, а не как исходные данные (см. db/sync_calendar.py).
+    """
+
+    __tablename__ = "trading_schedules"
+
+    date = Column(Date, primary_key=True)
+    weekday = Column(Integer, nullable=False)  # 0=понедельник ... 6=воскресенье (python date.weekday())
+    is_trading_day = Column(Boolean, nullable=False)  # была ли хоть одна свеча в этот день хоть в одной из отслеживаемых серий
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<TradingSchedule(date='{self.date}', is_trading_day={self.is_trading_day})>"
 
 
 class FuturesCandle1D(Base):

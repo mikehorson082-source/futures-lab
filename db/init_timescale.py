@@ -44,6 +44,8 @@ def init_timescale():
                 low NUMERIC(18, 9) NOT NULL,
                 close NUMERIC(18, 9) NOT NULL,
                 volume BIGINT NOT NULL,
+                candle_source SMALLINT,
+                ingest_source VARCHAR(16),
                 PRIMARY KEY (time, figi)
             );
         """))

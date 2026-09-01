@@ -81,6 +81,7 @@ def parse_candles_csv(zip_bytes: bytes, figi: str) -> List[tuple]:
     """
     Распаковывает CSV из ZIP в памяти и парсит минутные свечи.
     Формат CSV: uid;timestamp;open;close;high;low;volume;
+    Проставляет candle_source=1 (EXCHANGE) и ingest_source='zip'.
     """
     candles = []
     try:
@@ -106,7 +107,7 @@ def parse_candles_csv(zip_bytes: bytes, figi: str) -> List[tuple]:
                             low_p = float(parts[5])
                             vol = int(parts[6])
 
-                            candles.append((dt, figi, open_p, high_p, low_p, close_p, vol))
+                            candles.append((dt, figi, open_p, high_p, low_p, close_p, vol, 1, 'zip'))
                         except (ValueError, IndexError):
                             continue
     except Exception as e:
@@ -120,14 +121,16 @@ def insert_candles_batch(candles: List[tuple]):
         return 0
 
     query = """
-    INSERT INTO futures_candles (time, figi, open, high, low, close, volume)
+    INSERT INTO futures_candles (time, figi, open, high, low, close, volume, candle_source, ingest_source)
     VALUES %s
     ON CONFLICT (time, figi) DO UPDATE SET
         open = EXCLUDED.open,
         high = EXCLUDED.high,
         low = EXCLUDED.low,
         close = EXCLUDED.close,
-        volume = EXCLUDED.volume;
+        volume = EXCLUDED.volume,
+        candle_source = EXCLUDED.candle_source,
+        ingest_source = EXCLUDED.ingest_source;
     """
 
     db_raw = engine.raw_connection()
