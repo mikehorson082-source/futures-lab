@@ -42,6 +42,23 @@ def _utc(ts):
     return np.datetime64(t.tz_convert("UTC").tz_localize(None) if t.tzinfo else t)
 
 
+def load_series(name, tag):
+    """Полный ряд баров серии — нужен для альтернативных правил выхода.
+
+    Разметка (processing/labeling.py) фиксирует выход РОВНО по уровню
+    барьера: цена коснулась — считаем, что продали по нему. В жизни так не
+    бывает. Отсюда два дополнительных правила:
+      next-close — выход по закрытию СЛЕДУЮЩЕГО бара после касания;
+      next-worst — выход по ХУДШЕЙ цене следующего бара (low для лонга,
+                   high для шорта). Заведомо пессимистичнее реальности:
+                   так исполнилась бы заявка, попавшая в самый неудачный
+                   момент бара.
+    """
+    d = pd.read_csv(f"{D}{name}_bars_labeled{tag}.csv", parse_dates=["time"]).sort_values("time")
+    return (np.array([_utc(t) for t in d["time"]]), d["close"].to_numpy(float),
+            d["low"].to_numpy(float), d["high"].to_numpy(float))
+
+
 def load_held(name):
     h = pd.read_csv(f"{D}{name}_held.csv", parse_dates=["time"]).sort_values("time")
     chg = h["held_ticker"] != h["held_ticker"].shift()
@@ -52,7 +69,7 @@ def load_held(name):
     return h, rolls
 
 
-def build_trades(te, proba, thr, held, rolls, spread, side=1):
+def build_trades(te, proba, thr, held, rolls, spread, side=1, series=None, exit_rule="barrier"):
     """Одна позиция за раз, вход по открытию следующего бара, издержки —
     по удерживаемому контракту плюс роллы внутри сделки."""
     d = te.copy()
@@ -77,19 +94,32 @@ def build_trades(te, proba, thr, held, rolls, spread, side=1):
     for r in d.itertuples():
         if free_at is not None and r.entry_time < free_at:
             continue
-        t_in, t_out = ticker_at(r.entry_time), ticker_at(r.t1)
+        # --- выход: по барьеру (идеальный) или по следующему бару (реальный)
+        exit_price, exit_time = r.exit_price, r.t1
+        if series is not None and exit_rule != "barrier":
+            stimes, scloses, slows, shighs = series
+            k = np.searchsorted(stimes, _utc(r.t1), side="right")
+            if k < len(scloses):
+                if exit_rule == "next-close":
+                    exit_price = float(scloses[k])
+                else:  # next-worst: худшая цена следующего бара для нашей стороны
+                    exit_price = float(slows[k] if side == 1 else shighs[k])
+                exit_time = stimes[k]
+        t_in, t_out = ticker_at(r.entry_time), ticker_at(exit_time)
         lo = np.searchsorted(roll_times, _utc(r.entry_time), side="right")
-        hi = np.searchsorted(roll_times, _utc(r.t1), side="right")
+        hi = np.searchsorted(roll_times, _utc(exit_time), side="right")
         roll_cost = 0.0
         for j in range(lo, hi):
             roll_cost += 0.5 * sp(rolls["from"].iloc[j]) + 0.5 * sp(rolls["to"].iloc[j]) + COMMISSION_BP
         trades.append({
-            "entry_time": r.entry_time, "exit_time": r.t1, "reason": r.exit_reason,
-            "ret_gross": side * (r.exit_price - r.entry_price) / r.entry_price,
+            "entry_time": r.entry_time, "exit_time": exit_time, "reason": r.exit_reason,
+            "ret_gross": side * (exit_price - r.entry_price) / r.entry_price,
+            "ret_ideal": side * (r.exit_price - r.entry_price) / r.entry_price,
             "cost_bp": 0.5 * sp(t_in) + 0.5 * sp(t_out) + COMMISSION_BP + roll_cost,
             "roll_cost_bp": roll_cost, "n_rolls": hi - lo,
         })
-        free_at = r.t1
+        ts = pd.Timestamp(exit_time)
+        free_at = ts if ts.tzinfo else ts.tz_localize("UTC")
     return pd.DataFrame(trades)
 
 
@@ -128,6 +158,12 @@ def main():
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--embargo-fraction", type=float, default=0.01)
     ap.add_argument("--test", action="store_true", help="открыть test (по умолчанию — только train)")
+    ap.add_argument("--exit", dest="exit_rule", default="barrier",
+                    choices=["barrier", "next-close", "next-worst"],
+                    help="правило выхода: barrier — ровно по уровню барьера (как в "
+                         "разметке, оптимистично); next-close — по закрытию следующего "
+                         "бара после касания; next-worst — по ХУДШЕЙ цене следующего "
+                         "бара (заведомо пессимистично)")
     ap.add_argument("--features", choices=["basis", "carry"], default="basis",
                     help="basis — набор Этапа 1 (нужен спот, есть только у CNYRUBF); "
                          "carry — набор для серий без спота (BR и др.)")
@@ -136,6 +172,8 @@ def main():
     MKT = MKT if a.features == "basis" else NOBASIS + CARRY
 
     held, rolls = load_held(a.name)
+    series = load_series(a.name, a.tag) if a.exit_rule != "barrier" else None
+    print(f"правило выхода: {a.exit_rule}\n")
     tr = pd.read_csv(f"{D}{a.name}_train{a.tag}_v2.csv", parse_dates=["time", "t1"]).dropna(subset=MKT + ["target"])
 
     if not a.test:
@@ -153,7 +191,7 @@ def main():
             spread = roll_spreads(a.root, str(te["time"].min().date()), str(te["time"].max().date())).dropna().to_dict()
             m = fit(MKT, fit_df)
             thr = np.percentile(m.predict_proba(fit_df[MKT])[:, 1], 100 - a.top_pct)
-            t = build_trades(te, m.predict_proba(te[MKT])[:, 1], thr, held, rolls, spread, a.side)
+            t = build_trades(te, m.predict_proba(te[MKT])[:, 1], thr, held, rolls, spread, a.side, series, a.exit_rule)
             if not len(t):
                 continue
             n, n1 = net_bp(t), net_bp(t, 1.0)
@@ -164,6 +202,7 @@ def main():
                          "сделок через ролл": int((t.n_rolls > 0).sum()),
                          "чистая": round(n.mean(), 2),
                          "t": round(n.mean() / n.std() * np.sqrt(len(n)), 2),
+                         "идеальный выход": round(t.ret_ideal.mean() * 1e4 - t.cost_bp.mean(), 2),
                          "чистая +1 тик SL": round(n1.mean(), 2)})
         res = pd.DataFrame(rows)
         print(f"=== {a.name}: walk-forward внутри train, test НЕ открыт ===")
@@ -179,7 +218,7 @@ def main():
     m = fit(MKT, tr)
     thr = np.percentile(m.predict_proba(tr[MKT])[:, 1], 100 - a.top_pct)
     proba = m.predict_proba(te[MKT])[:, 1]
-    t = build_trades(te, proba, thr, held, rolls, spread, a.side)
+    t = build_trades(te, proba, thr, held, rolls, spread, a.side, series, a.exit_rule)
 
     days = pd.date_range(te["time"].min().tz_localize(None).normalize(),
                          te["time"].max().tz_localize(None).normalize(), freq="D")
@@ -194,7 +233,8 @@ def main():
     print(f"\n=== {a.name}: TEST {days[0].date()}..{days[-1].date()} ({years:.2f} года) ===")
     print(f"сделок {len(t)}, дней в позиции {in_pos:.0%}, "
           f"сделок через ролл {(t.n_rolls > 0).sum()} ({(t.n_rolls > 0).mean():.0%})")
-    print(f"валовая (по NAV, контанго уже внутри) {t.ret_gross.mean()*1e4:+.2f} б.п./сделку")
+    print(f"валовая (по NAV, контанго уже внутри) {t.ret_gross.mean()*1e4:+.2f} б.п./сделку "
+          f"(при идеальном выходе по барьеру было бы {t.ret_ideal.mean()*1e4:+.2f})")
     print(f"издержки {t.cost_bp.mean():.2f} б.п. (из них ролл {t.roll_cost_bp.mean():.2f})")
     print(f"ЧИСТАЯ {n.mean():+.2f} б.п./сделку (t={n.mean()/n.std()*np.sqrt(len(n)):.2f}); "
           f"с проскальзыванием +1 тик на SL {net_bp(t, 1.0).mean():+.2f}")
@@ -202,7 +242,7 @@ def main():
           f"безрисковая {rf*100:.2f}% | maxDD {s['maxDD']*100:.2f}% | Sharpe {s['Sharpe']:.2f}")
 
     rng = np.random.default_rng(0)
-    ctrl = [net_bp(build_trades(te, rng.permutation(proba), thr, held, rolls, spread, a.side)).mean()
+    ctrl = [net_bp(build_trades(te, rng.permutation(proba), thr, held, rolls, spread, a.side, series, a.exit_rule)).mean()
             for _ in range(5)]
     print(f"контроль (перемешанные вероятности, 5 прогонов): {np.mean(ctrl):+.2f} б.п. "
           f"(разброс {np.std(ctrl):.2f})")
