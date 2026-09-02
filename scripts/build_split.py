@@ -11,6 +11,7 @@ import argparse
 import csv
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -40,6 +41,12 @@ def main(argv=None):
              "нет, а граница должна быть ТА ЖЕ, что у CNYRUBF — иначе сравнение "
              "непрерывного ряда с пулом пойдёт по разным периодам.",
     )
+    parser.add_argument(
+        "--split-time", default=None,
+        help="ЯВНАЯ граница train/test (ISO). Нужна, когда диапазон свечей серии "
+             "изменился после дозагрузки истории: без неё compute_split_time сдвинет "
+             "границу, и новые витрины окажутся несравнимы со старыми результатами.",
+    )
     args = parser.parse_args(argv)
 
     in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_labeled{args.tag}.csv"
@@ -52,7 +59,8 @@ def main(argv=None):
     # Та же граница, что и в scripts/build_features.py (не пересчитывается из
     # строк файла) — см. docstring processing/splitting.py.
     t_min, t_max = get_root_time_range(args.split_root or args.root)
-    split_time = compute_split_time(t_min, t_max, args.test_fraction)
+    split_time = (datetime.fromisoformat(args.split_time) if args.split_time
+                  else compute_split_time(t_min, t_max, args.test_fraction))
 
     train, test, report = purge_embargo_split(
         rows, split_time, t_min, t_max, embargo_fraction=args.embargo_fraction
@@ -69,7 +77,6 @@ def main(argv=None):
     print(f"test:  {report['n_test']:7} строк")
 
     # Инвариант: ни один train-пример не должен "видеть" момент начала test
-    from datetime import datetime
     max_t1_train = max((datetime.fromisoformat(r["t1"]) for r in train), default=None)
     ok = max_t1_train is None or max_t1_train < report["split_time"]
     print(f"\nПроверка: max(t1) по train = {max_t1_train}  (должно быть < граница test) — {'OK' if ok else 'НАРУШЕНО'}")
