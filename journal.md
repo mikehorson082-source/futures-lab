@@ -2301,3 +2301,159 @@ Walk-forward внутри train (5 окон):
    валюта впереди акции. По факту: акция ≥ валюта > индекс ≫ нефть, и
    упорядочивает их не тип рынка, а наличие и качество базиса. В статью
    это надо писать как есть, а не подгонять под план.
+
+
+---
+
+## 28. 🧰 Команды: как воспроизвести разделы 22-27 (2026-09-02)
+
+Шпаргалка запуска для всего, что сделано в разделах 22-27. Раньше такие
+блоки уходили в `plan.md`; по просьбе пользователя (2026-09-02) команды
+экспериментов живут здесь, рядом с результатами, а `plan.md` остаётся
+шпаргалкой основной цепочки Этапа 1 и правится только по отдельной
+просьбе.
+
+### 28.1 Эксперимент «все фьючерсы в одном датасете» — к разделу 22
+
+Подготовка остальных серий (шаги 1-2 обычного пайплайна) и склейка:
+
+```bash
+for R in IMOEXF SBERF BR; do
+  .venv/bin/python -m scripts.build_features --root $R --test-fraction 0.2
+  .venv/bin/python -m scripts.build_labels --root $R --tag _w4 \
+      --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+done
+.venv/bin/python -m scripts.build_pooled_dataset --roots CNYRUBF SBERF IMOEXF BR --tag _w4
+.venv/bin/python -m scripts.train_pooled_model --tag _w4
+```
+
+* **Файлы:** `scripts/build_pooled_dataset.py` (склейка + ОДНА общая
+  граница train/test на все серии + purge/embargo),
+  `scripts/train_pooled_model.py` (сравнение own / pool / pool+id /
+  leave-one-instrument-out на одних и тех же test-строках).
+* **Результат:** `data/features/POOL_train_w4.csv`, `POOL_test_w4.csv`,
+  `POOL_auc_comparison_w4.csv`. Итог эксперимента — раздел 22:
+  AUC ≈ 0.5 во всех режимах, весь сигнал Этапа 1 был в базисе CNYRUBF.
+
+### 28.2 Непрерывный ряд по ETF Trick — к разделу 23
+
+Альтернатива пулу контрактов: контракты склеены в один ряд NAV методом
+де Прадо (AFML §2.4.1), дальше работает ОБЫЧНЫЙ пайплайн — непрерывный
+ряд подставляется как «серия» `CNYRUBF_CONT`.
+
+```bash
+.venv/bin/python -m scripts.build_continuous_series --root CNYRUBF
+.venv/bin/python -m scripts.build_continuous_features --root CNYRUBF
+.venv/bin/python -m scripts.build_labels --root CNYRUBF_CONT --tag _w4 \
+    --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+.venv/bin/python -m scripts.build_split --root CNYRUBF_CONT --split-root CNYRUBF --tag _w4
+.venv/bin/python -m scripts.build_derived_features --root CNYRUBF_CONT --tag _w4
+.venv/bin/python -m scripts.walkforward_eval --root CNYRUBF_CONT --tag _w4
+```
+
+* **Файлы:** `processing/etf_trick.py`, `scripts/build_continuous_series.py`
+  (ряд + диагностика разрывов на роллах), `scripts/build_continuous_features.py`
+  (бары и признаки поверх NAV; базис — по сырой цене ближнего контракта).
+* **`--split-root`** у `build_split` — новый флаг: границу train/test берём
+  по диапазону свечей CNYRUBF, потому что серии `CNYRUBF_CONT` в БД нет,
+  а граница обязана совпадать с пулом, иначе сравнение пойдёт по разным
+  периодам.
+* **Результат:** walk-forward AUC 0.768 против 0.711 у пула — но контроль
+  «пул только с ближним контрактом» даёт 0.767, то есть выигрыш дал отказ
+  от дальних контрактов, а не склейка. Подробно — раздел 23.
+
+### 28.3 Бэктест непрерывного ряда и правило ролла — к разделу 24
+
+```bash
+# walk-forward внутри train (test не открывается)
+.venv/bin/python -m scripts.backtest_continuous --name CNYRUBF_CONT --tag _w4
+# test — только явным флагом
+.venv/bin/python -m scripts.backtest_continuous --name CNYRUBF_CONT --tag _w4 --test
+# контроль «пул, только ближний контракт» (спреды — по настоящей серии!)
+.venv/bin/python -m scripts.backtest --root CNYRUBF_R1 --spread-root CNYRUBF --tag _w4
+# альтернативное правило ролла: календарное, за N дней до экспирации
+.venv/bin/python -m scripts.build_continuous_series --root CNYRUBF \
+    --roll-rule days --days-before 5 --name CNYRUBF_C5D
+```
+
+* **Файл:** `scripts/backtest_continuous.py` — цена сделки NAV, спред по
+  удерживаемому контракту, издержка каждого ролла внутри сделки считается
+  явно.
+* **`--spread-root`** у `backtest.py` / `backtest_walkforward.py` — новый
+  флаг. Без него производная выборка (`CNYRUBF_R1`) получала пустой
+  `cost_map`, и `fillna(0)` молча считал бэктест БЕЗ издержек; теперь
+  скрипт на это падает с объяснением.
+* **Результат:** test +18.10 б.п./сделку против +16.57 у «только ближний»
+  и +11.14 у полного пула; издержка ролла ≈ 0 (сделки короче ролл-цикла),
+  правило ролла на результат почти не влияет. Подробно — раздел 24.
+
+### 28.4 Этап 2 — перенос связки на BR и признак carry — к разделу 25
+
+```bash
+.venv/bin/python -m scripts.build_continuous_series --root BR --name BR_CONT
+.venv/bin/python -m scripts.build_continuous_features --root BR --name BR_CONT
+.venv/bin/python -m scripts.build_labels --root BR_CONT --tag _w4 \
+    --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+.venv/bin/python -m scripts.build_split --root BR_CONT --split-root BR --tag _w4
+.venv/bin/python -m scripts.build_derived_features --root BR_CONT --tag _w4
+.venv/bin/python -m scripts.walkforward_eval --root BR_CONT --tag _w4 --with-carry
+.venv/bin/python -m scripts.backtest_continuous --name BR_CONT --root BR --tag _w4 --features carry
+```
+
+* **`carry_annual`** — новый признак в `FEATURE_COLUMNS`: годовая цена
+  времени по календарному спреду (ближний против следующего), считается
+  БЕЗ внешнего спота, поэтому доступен любой серии. Производные —
+  `carry_z`, `carry_chg_20` в `DERIVED_FEATURES`. У витрин, построенных
+  раньше, колонки нет — производные тогда просто NaN, это не ошибка.
+* **`--with-carry`** у `walkforward_eval` и **`--features carry`** у
+  `backtest_continuous` — наборы признаков для серий без спота.
+* **Результат:** на BR AUC 0.52 и −0.09 б.п. на сделку (сигнала нет).
+  Контроль на CNYRUBF: carry даёт 0.500 против 0.768 у базиса — то есть
+  календарный спред базис НЕ заменяет. Подробно — раздел 25.
+
+### 28.5 Этап 3 — IMOEXF: индекс как спот — к разделу 26
+
+```bash
+.venv/bin/python -m db.sync_reference_data          # теперь грузит и индекс IMOEX
+.venv/bin/python -m scripts.build_continuous_series --root IMOEXF --name IMOEXF_CONT
+.venv/bin/python -m scripts.build_continuous_features --root IMOEXF --name IMOEXF_CONT
+.venv/bin/python -m scripts.build_labels --root IMOEXF_CONT --tag _w4 \
+    --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+.venv/bin/python -m scripts.build_split --root IMOEXF_CONT --split-root IMOEXF --tag _w4
+.venv/bin/python -m scripts.build_derived_features --root IMOEXF_CONT --tag _w4
+.venv/bin/python -m scripts.walkforward_eval --root IMOEXF_CONT --tag _w4
+.venv/bin/python -m scripts.backtest_continuous --name IMOEXF_CONT --root IMOEXF --tag _w4
+```
+
+* **Новое в инфраструктуре:** таблица `index_prices` (модель `IndexPrice`),
+  загрузчик `sync_index_price` (MOEX ISS, `engine=stock`, `market=index`,
+  `board=SNDX`), `ROOT_TO_SPOT_INDEX` и `ROOT_TO_PRICE_SCALE` в
+  `compute_basis.py` (у MIX котировка — пункты индекса ×100, без деления
+  базис был бы +9800%).
+* **Результат:** walk-forward AUC 0.700 с базисом против 0.535 без него;
+  бэктест +18.61 б.п./сделку (3 окна из 3), test — +17.30 б.п. (t=5.23),
+  +71.2% годовых при безрисковой 16.68%. Первый независимый
+  положительный результат проекта. Подробно — раздел 26.
+
+### 28.6 Этап 4 — SBERF: акция как спот — к разделу 27
+
+```bash
+.venv/bin/python -m db.sync_reference_data          # грузит и акцию SBER
+.venv/bin/python -m scripts.build_continuous_series --root SBERF --name SBERF_CONT
+.venv/bin/python -m scripts.build_continuous_features --root SBERF --name SBERF_CONT
+.venv/bin/python -m scripts.build_labels --root SBERF_CONT --tag _w4 \
+    --horizon-bars 80 --tp-vol-mult 4.0 --sl-vol-mult 2.0
+.venv/bin/python -m scripts.build_split --root SBERF_CONT --split-root SBERF --tag _w4
+.venv/bin/python -m scripts.build_derived_features --root SBERF_CONT --tag _w4
+.venv/bin/python -m scripts.walkforward_eval --root SBERF_CONT --tag _w4
+.venv/bin/python -m scripts.backtest_continuous --name SBERF_CONT --root SBERF --tag _w4
+```
+
+* **Новое:** таблица `equity_prices` (модель `EquityPrice`), загрузчик
+  `sync_equity_price` (ISS, `market=shares`, борд TQBR),
+  `ROOT_TO_SPOT_EQUITY` и масштаб ×100 в `compute_basis.py`.
+* **Дивиденды не загружены** — эндпоинты ISS из этого окружения не
+  отдают их; справедливая цена считается без вычета дивидендов.
+* **Результат:** AUC 0.796 с базисом против 0.519 без него — лучший из
+  четырёх серий; бэктест +54.03 б.п./сделку (5 окон из 5), test +44.50
+  б.п. (t=5.43, 90 сделок). Подробно — раздел 27.
