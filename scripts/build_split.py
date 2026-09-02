@@ -32,6 +32,14 @@ def main(argv=None):
     )
     parser.add_argument("--embargo-fraction", type=float, default=0.01)
     parser.add_argument("--tag", default="", help="суффикс файлов варианта разметки (см. build_labels --tag)")
+    parser.add_argument(
+        "--split-root", default=None,
+        help="по какой root-серии брать диапазон свечей для границы train/test. "
+             "Нужно для производных рядов, которых нет в БД как серии: у "
+             "непрерывного ряда CNYRUBF_CONT (ETF Trick) свечей в futures_candles "
+             "нет, а граница должна быть ТА ЖЕ, что у CNYRUBF — иначе сравнение "
+             "непрерывного ряда с пулом пойдёт по разным периодам.",
+    )
     args = parser.parse_args(argv)
 
     in_path = Path(__file__).resolve().parent.parent / "data" / "features" / f"{args.root}_bars_labeled{args.tag}.csv"
@@ -43,7 +51,7 @@ def main(argv=None):
 
     # Та же граница, что и в scripts/build_features.py (не пересчитывается из
     # строк файла) — см. docstring processing/splitting.py.
-    t_min, t_max = get_root_time_range(args.root)
+    t_min, t_max = get_root_time_range(args.split_root or args.root)
     split_time = compute_split_time(t_min, t_max, args.test_fraction)
 
     train, test, report = purge_embargo_split(

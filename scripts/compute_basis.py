@@ -42,6 +42,22 @@ from db.database import engine
 ROOT_TO_SPOT_PAIR = {
     "CNYRUBF": "CNYRUB",
 }
+# Серии, у которых "спот" — биржевой ИНДЕКС (таблица index_prices), а не
+# валютная пара. Формула базиса та же, источник другой.
+ROOT_TO_SPOT_INDEX = {
+    "IMOEXF": "IMOEX",
+}
+# Масштаб котировки фьючерса к единицам спота. У MIX (фьючерс на индекс
+# МосБиржи) цена выражена в пунктах индекса × 100: MXU6 = 209896 при индексе
+# 2093.4. Без деления на 100 базис был бы бессмысленным (+9800%).
+ROOT_TO_PRICE_SCALE = {
+    "IMOEXF": 100.0,
+    "SBERF": 100.0,   # SRU6 = 27270 при цене акции 270.11 -> контракт на 100 акций
+}
+# Серии, у которых "спот" — цена АКЦИИ (таблица equity_prices).
+ROOT_TO_SPOT_EQUITY = {
+    "SBERF": "SBER",
+}
 ROOT_TO_FOREIGN_RATE = {
     # (country, series) — series см. db/sync_reference_data.py. SHIBOR 1Y —
     # дневная гранулярность и нет обрыва истории (в отличие от прежней
@@ -87,6 +103,22 @@ def get_spot_map(pair: str):
         rows = conn.execute(text("""
             SELECT date, close FROM currency_rates WHERE pair = :pair
         """), {"pair": pair}).fetchall()
+    return {r.date: float(r.close) for r in rows}
+
+
+def get_index_map(symbol: str):
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT date, close FROM index_prices WHERE symbol = :symbol
+        """), {"symbol": symbol}).fetchall()
+    return {r.date: float(r.close) for r in rows}
+
+
+def get_equity_map(ticker: str):
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT date, close FROM equity_prices WHERE ticker = :ticker
+        """), {"ticker": ticker}).fetchall()
     return {r.date: float(r.close) for r in rows}
 
 

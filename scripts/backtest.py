@@ -149,6 +149,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="CNYRUBF")
     ap.add_argument("--tag", default="", help="вариант ширины барьеров, см. build_labels --tag")
+    ap.add_argument("--spread-root", default=None,
+                    help="по какой root-серии брать спреды и ставку из БД. Нужно для "
+                         "производных выборок (например CNYRUBF_R1 — только ближний "
+                         "контракт): в БД такой серии нет, спреды надо брать по CNYRUBF. "
+                         "Без этого cost_map окажется пустым и издержки молча станут нулём.")
     ap.add_argument("--side", type=int, default=1, choices=[1, -1],
                     help="сторона сделки; должна совпадать со стороной разметки")
     ap.add_argument("--top-pct", type=float, default=10.0)
@@ -167,8 +172,21 @@ def main():
     thr = np.percentile(model.predict_proba(trf[MKT])[:, 1], 100 - a.top_pct)
 
     # окно оценки спреда = окно сделок (см. docstring roll_spreads)
-    sp = roll_spreads(a.root, str(te["time"].min().date()), str(te["time"].max().date()))
+    sp = roll_spreads(a.spread_root or a.root, str(te["time"].min().date()), str(te["time"].max().date()))
     cost_map = (sp + COMMISSION_BP).to_dict()
+    # Защита от молчаливого обнуления издержек: cost_map строится по
+    # root-серии из БД, а файл может быть производной выборкой (например
+    # CNYRUBF_R1 — только ближний контракт), которой в БД нет. Тогда
+    # .map(cost_map).fillna(0) ниже дал бы бэктест БЕЗ издержек и никак об
+    # этом не сообщил — ровно эта ошибка случилась 2026-09-02 (раздел 24).
+    missing = sorted(set(te["ticker"]) - set(cost_map))
+    if missing:
+        raise SystemExit(
+            f"Нет оценки спреда для контрактов: {', '.join(missing[:5])}"
+            f"{' ...' if len(missing) > 5 else ''}. Похоже, --root ({a.root}) — "
+            f"производная выборка, которой нет в futures_candles. Укажи "
+            f"--spread-root с настоящей серией (например CNYRUBF)."
+        )
     print("оценка круговых издержек по контрактам (Roll + комиссия), б.п.:")
     print("  " + ", ".join(f"{k} {v:.2f}" for k, v in sorted(cost_map.items(), key=lambda x: x[1])))
 

@@ -36,6 +36,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="CNYRUBF")
     ap.add_argument("--tag", default="", help="вариант ширины барьеров, см. build_labels --tag")
+    ap.add_argument("--spread-root", default=None,
+                    help="по какой root-серии брать спреды и ставку из БД. Нужно для "
+                         "производных выборок (например CNYRUBF_R1 — только ближний "
+                         "контракт): в БД такой серии нет, спреды надо брать по CNYRUBF. "
+                         "Без этого cost_map окажется пустым и издержки молча станут нулём.")
     ap.add_argument("--side", type=int, default=1, choices=[1, -1])
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--top-pct", type=float, default=10.0)
@@ -58,7 +63,7 @@ def main():
         tr = df[(df["time"] < lo) & (df["t1"] < lo) & (df["time"] < lo - embargo)]
         if len(tr) < 2000 or len(te) < 500 or te["target"].nunique() < 2:
             continue
-        cost_map = (roll_spreads(a.root, str(te["time"].min().date()),
+        cost_map = (roll_spreads(a.spread_root or a.root, str(te["time"].min().date()),
                                  str(te["time"].max().date())) + COMMISSION_BP).to_dict()
         m = fit(MKT, tr)
         thr = np.percentile(m.predict_proba(tr[MKT])[:, 1], 100 - a.top_pct)

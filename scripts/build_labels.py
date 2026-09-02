@@ -22,7 +22,8 @@ from processing.labeling import LABEL_COLUMNS, compute_uniqueness_weights, overl
 NUMERIC_COLUMNS = [
     "open", "high", "low", "close", "volume", "dollar_volume", "n_ticks",
     "days_to_expiration", "life_fraction_remaining", "contract_rank", "volume_share",
-    "basis_pct_rub_only", "basis_pct_full", "log_return_1", "volatility_20", "momentum_10",
+    "basis_pct_rub_only", "basis_pct_full", "carry_annual",
+    "log_return_1", "volatility_20", "momentum_10",
 ]
 
 

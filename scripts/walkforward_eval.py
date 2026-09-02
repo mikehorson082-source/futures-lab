@@ -38,6 +38,19 @@ ARMS = {
 }
 
 
+# Наборы для серий БЕЗ внешнего спота (BR, IMOEXF, SBERF): базиса там нет
+# вообще, зато есть carry_annual — цена времени, снятая с самой кривой
+# (scripts/build_continuous_features.py). Включаются флагом --with-carry.
+NOBASIS = ["vol_ratio", "ret_1_z", "mom_10_z", "mom_50_z"]
+CARRY = ["carry_z", "carry_chg_20"]
+ARMS_CARRY = {
+    "рынок без базиса + логрегр.":     (NOBASIS,          "logreg"),
+    "рынок + carry + логрегр.":        (NOBASIS + CARRY,  "logreg"),
+    "рынок + carry + CatBoost":        (NOBASIS + CARRY,  "catboost"),
+    "только carry + логрегр.":         (CARRY,            "logreg"),
+}
+
+
 def make_model(kind):
     if kind == "logreg":
         return make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
@@ -58,6 +71,9 @@ def main():
     p.add_argument("--root", default="CNYRUBF")
     p.add_argument("--tag", default="", help="вариант ширины барьеров, см. build_labels --tag")
     p.add_argument("--folds", type=int, default=5)
+    p.add_argument("--with-carry", action="store_true",
+                   help="сравнивать наборы с carry вместо наборов с базисом "
+                        "(для серий, где спота нет: BR, IMOEXF, SBERF)")
     p.add_argument("--embargo-fraction", type=float, default=0.01)
     a = p.parse_args()
 
@@ -70,7 +86,8 @@ def main():
     # обучающий минимум, остальные folds штук по очереди играют роль теста.
     edges = [t_min + span * i / (a.folds + 1) for i in range(a.folds + 2)]
 
-    results = {name: [] for name in ARMS}
+    arms = ARMS_CARRY if a.with_carry else ARMS
+    results = {name: [] for name in arms}
     print(f"train: {len(df)} строк, {t_min.date()} .. {t_max.date()}, окон {a.folds}\n")
 
     for k in range(1, a.folds + 1):
@@ -84,7 +101,7 @@ def main():
             continue
         print()
         w_all = tr["sample_weight"] / tr["sample_weight"].mean()
-        for name, (F, kind) in ARMS.items():
+        for name, (F, kind) in arms.items():
             trf = tr.dropna(subset=F + ["target"])
             tef = te.dropna(subset=F + ["target"])
             proba = fit_predict(kind, trf[F], trf["target"], w_all.loc[trf.index], tef[F])

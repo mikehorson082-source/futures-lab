@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.database import engine, Base, get_db_session
-from db.models import CurrencyRate, CbrKeyRate, ForeignKeyRate
+from db.models import CurrencyRate, CbrKeyRate, ForeignKeyRate, IndexPrice, EquityPrice
 
 DEFAULT_START_DATE = "2022-01-01"  # тот же период, что у остальных данных проекта
 
@@ -216,6 +216,45 @@ def sync_currency_rate(pair: str = "CNYRUB", ticker: str = "CNYRUB_TOM", board: 
           f"close {rows[-1]['close']} … {rows[0]['close']}")
 
 
+def sync_index_price(symbol: str = "IMOEX", board: str = "SNDX",
+                     start: str = DEFAULT_START_DATE, end: Optional[str] = None):
+    """Дневная история биржевого индекса с того же ISS, что и спот-курс —
+    другой engine/market (stock/index), формат ответа тот же."""
+    end = end or date.today().isoformat()
+    print(f"📥 Загрузка индекса {symbol} ({start} … {end})...", flush=True)
+    raw = fetch_currency_rate(symbol, symbol, board, start, end,
+                              engine_name="stock", market="index")
+    if not raw:
+        print(f"⚠️ Пустой ответ ISS для {symbol} — не загружено.")
+        return
+    rows = [{"date": r["date"], "symbol": r["pair"], "source": r["source"],
+             "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"]}
+            for r in raw]
+    _upsert(IndexPrice.__table__, rows, ["date", "symbol"])
+    rows_sorted = sorted(rows, key=lambda r: r["date"])
+    print(f"✅ {symbol}: {len(rows)} дней, {rows_sorted[0]['date']} … {rows_sorted[-1]['date']}, "
+          f"close {rows_sorted[0]['close']} … {rows_sorted[-1]['close']}")
+
+
+def sync_equity_price(ticker: str = "SBER", board: str = "TQBR",
+                      start: str = DEFAULT_START_DATE, end: Optional[str] = None):
+    """Дневная история акции — тот же ISS, market=shares."""
+    end = end or date.today().isoformat()
+    print(f"📥 Загрузка акции {ticker} ({start} … {end})...", flush=True)
+    raw = fetch_currency_rate(ticker, ticker, board, start, end,
+                              engine_name="stock", market="shares")
+    if not raw:
+        print(f"⚠️ Пустой ответ ISS для {ticker} — не загружено.")
+        return
+    rows = [{"date": r["date"], "ticker": r["pair"], "source": r["source"],
+             "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"]}
+            for r in raw]
+    _upsert(EquityPrice.__table__, rows, ["date", "ticker"])
+    rs = sorted(rows, key=lambda r: r["date"])
+    print(f"✅ {ticker}: {len(rows)} дней, {rs[0]['date']} … {rs[-1]['date']}, "
+          f"close {rs[0]['close']} … {rs[-1]['close']}")
+
+
 def sync_cbr_key_rate(start: str = DEFAULT_START_DATE, end: Optional[str] = None):
     end = end or date.today().isoformat()
     print(f"📥 Загрузка ключевой ставки ЦБ РФ ({start} … {end})...", flush=True)
@@ -250,8 +289,12 @@ def sync_foreign_key_rate(country: str = "CN", start: str = DEFAULT_START_DATE, 
 
 
 def sync_all(start: str = DEFAULT_START_DATE, end: Optional[str] = None):
-    Base.metadata.create_all(bind=engine, tables=[CurrencyRate.__table__, CbrKeyRate.__table__, ForeignKeyRate.__table__])
+    Base.metadata.create_all(bind=engine, tables=[CurrencyRate.__table__, CbrKeyRate.__table__,
+                                                  ForeignKeyRate.__table__, IndexPrice.__table__,
+                                                  EquityPrice.__table__])
     sync_currency_rate(start=start, end=end)
+    sync_index_price(start=start, end=end)
+    sync_equity_price(start=start, end=end)
     sync_cbr_key_rate(start=start, end=end)
     sync_foreign_key_rate(start=start, end=end)
 

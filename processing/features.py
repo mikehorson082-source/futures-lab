@@ -54,7 +54,12 @@ from sqlalchemy import text
 from db.database import engine
 from scripts.compute_basis import (
     ROOT_TO_FOREIGN_RATE,
+    ROOT_TO_PRICE_SCALE,
+    ROOT_TO_SPOT_EQUITY,
+    ROOT_TO_SPOT_INDEX,
     ROOT_TO_SPOT_PAIR,
+    get_equity_map,
+    get_index_map,
     get_rate_series,
     get_spot_map,
     rate_as_of,
@@ -139,11 +144,17 @@ def add_basis_features(bars: List[dict], meta: dict, root_symbol: str, spot_map,
             b["basis_pct_full"] = None
             continue
 
-        actual = b["close"]
+        # масштаб котировки к единицам спота (у MIX — пункты индекса × 100)
+        actual = b["close"] / ROOT_TO_PRICE_SCALE.get(root_symbol, 1.0)
         theory_rub_only = spot * (1 + (r_rub / 100) * t_days / 365)
         b["basis_pct_rub_only"] = (actual - theory_rub_only) / theory_rub_only * 100
 
-        b["basis_pct_full"] = None
+        # Без второй ставки полная формула вырождается в рублёвую: у фьючерса
+        # на ИНДЕКС нет "иностранной ставки", вместо неё из справедливой цены
+        # надо было бы вычесть ожидаемые дивиденды — их в проекте нет (см.
+        # раздел 26 журнала, это известное ограничение). Чтобы модели Этапа 1
+        # (они читают basis_pct_full) работали и здесь, дублируем значение.
+        b["basis_pct_full"] = b["basis_pct_rub_only"] if not fr_dates else None
         if fr_dates:
             r_cn = rate_as_of(d, fr_dates, fr_rates)
             if r_cn is not None:
@@ -154,9 +165,16 @@ def add_basis_features(bars: List[dict], meta: dict, root_symbol: str, spot_map,
 def load_basis_inputs(root_symbol: str):
     """None, если для root-серии нет спот-пары (базис не считается)."""
     spot_pair = ROOT_TO_SPOT_PAIR.get(root_symbol)
-    if spot_pair is None:
+    index_symbol = ROOT_TO_SPOT_INDEX.get(root_symbol)
+    equity_ticker = ROOT_TO_SPOT_EQUITY.get(root_symbol)
+    if spot_pair is None and index_symbol is None and equity_ticker is None:
         return None
-    spot_map = get_spot_map(spot_pair)
+    if spot_pair:
+        spot_map = get_spot_map(spot_pair)
+    elif index_symbol:
+        spot_map = get_index_map(index_symbol)
+    else:
+        spot_map = get_equity_map(equity_ticker)
     kr_dates, kr_rates = get_rate_series("cbr_key_rate")
     fr_dates, fr_rates = [], []
     foreign_key = ROOT_TO_FOREIGN_RATE.get(root_symbol)
@@ -196,6 +214,7 @@ FEATURE_COLUMNS = [
     "open", "high", "low", "close", "volume", "dollar_volume", "n_ticks",
     "days_to_expiration", "life_fraction_remaining", "contract_rank", "volume_share",
     "basis_pct_rub_only", "basis_pct_full",
+    "carry_annual",
     "log_return_1", "volatility_20", "momentum_10",
 ]
 
@@ -221,6 +240,9 @@ DERIVED_FEATURES = [
     "mom_10_z",       # momentum_10 в единицах сигмы (нормировка на sqrt(10))
     "mom_50_z",       # то же на более длинном окне — раздел 14 (momentum_10
                       # почти не работал, возможно окно слишком короткое)
+    "carry_z",        # z-score carry_annual — «базис по кривой», работает без
+                      # внешнего спота, т.е. и там, где ROOT_TO_SPOT_PAIR пуст
+    "carry_chg_20",   # изменение carry за 20 баров
 ]
 
 
@@ -246,6 +268,16 @@ def add_derived_features(df, window: int = 250, min_periods: int = 60):
     df["basis_z"] = ((df["basis_pct_full"] - basis_mean) / basis_std).clip(-10, 10)
 
     df["basis_chg_20"] = g["basis_pct_full"].transform(lambda s: s - s.shift(20))
+
+    # carry_annual (календарный спред, scripts/build_continuous_features.py) —
+    # у старых витрин этой колонки нет вообще, поэтому её отсутствие не ошибка,
+    # а «признак не считался»: тогда производные от неё просто NaN.
+    if "carry_annual" not in df.columns:
+        df["carry_annual"] = float("nan")
+    carry_mean = roll("carry_annual", "mean")
+    carry_std = roll("carry_annual", "std").where(lambda s: s > 1e-9)
+    df["carry_z"] = ((df["carry_annual"] - carry_mean) / carry_std).clip(-10, 10)
+    df["carry_chg_20"] = g["carry_annual"].transform(lambda s: s - s.shift(20))
 
     vol_med = roll("volatility_20", "median")
     vol_med = vol_med.where(vol_med > 1e-12)

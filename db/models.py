@@ -175,6 +175,59 @@ class CurrencyRate(Base):
         return f"<CurrencyRate(pair='{self.pair}', date='{self.date}', close={self.close})>"
 
 
+class IndexPrice(Base):
+    """
+    Дневное значение биржевого ИНДЕКСА (MOEX ISS), не фьючерс и не валюта.
+
+    Отдельная таблица, а не `currency_rates` с выдуманной "парой": индекс —
+    это уровень, а не курс обмена, и складывать их в одну таблицу значило бы
+    ради экономии одной сущности запутать смысл колонки `pair`.
+
+    Нужен для базиса Этапа 3 (IMOEXF): фьючерс на индекс сравнивается со
+    значением самого индекса ровно так же, как валютный фьючерс со спотом.
+    """
+
+    __tablename__ = "index_prices"
+
+    date = Column(Date, primary_key=True)
+    symbol = Column(String(16), primary_key=True)   # 'IMOEX'
+    source = Column(String(16), nullable=False)     # 'moex_iss'
+    open = Column(Numeric(18, 6), nullable=True)
+    high = Column(Numeric(18, 6), nullable=True)
+    low = Column(Numeric(18, 6), nullable=True)
+    close = Column(Numeric(18, 6), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<IndexPrice(symbol='{self.symbol}', date='{self.date}', close={self.close})>"
+
+
+class EquityPrice(Base):
+    """
+    Дневная цена АКЦИИ с MOEX ISS (борд TQBR) — спот для фьючерса на
+    отдельную бумагу (Этап 4, SBERF).
+
+    Отдельно от `index_prices` по той же причине, по которой индекс отделён
+    от валюты: это разные сущности с разными источниками и разной
+    справедливой ценой (у акции в неё входят дивиденды, у индекса —
+    усреднённая дивидендная доходность, у валюты — вторая ставка).
+    """
+
+    __tablename__ = "equity_prices"
+
+    date = Column(Date, primary_key=True)
+    ticker = Column(String(16), primary_key=True)   # 'SBER'
+    source = Column(String(16), nullable=False)     # 'moex_iss'
+    open = Column(Numeric(18, 6), nullable=True)
+    high = Column(Numeric(18, 6), nullable=True)
+    low = Column(Numeric(18, 6), nullable=True)
+    close = Column(Numeric(18, 6), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<EquityPrice(ticker='{self.ticker}', date='{self.date}', close={self.close})>"
+
+
 class CbrKeyRate(Base):
     """
     Ключевая ставка ЦБ РФ по датам ДЕЙСТВИЯ (не объявления решения) —
