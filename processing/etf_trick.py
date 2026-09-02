@@ -52,10 +52,19 @@ def build_roll_schedule_by_volume(
 ) -> List[Tuple[date, str]]:
     """Расписание роллов по ПЕРЕТОКУ ЛИКВИДНОСТИ, причинно.
 
-    Правило: если в день d оборот следующего контракта превысил оборот
-    текущего — переходим со СЛЕДУЮЩЕГО торгового дня (решение принимается
-    по уже закрытому дню d, не по дню перехода: иначе это заглядывание в
-    будущее на один день).
+    Правило: в день d смотрим, какой из ещё не пройденных контрактов серии
+    имеет НАИБОЛЬШИЙ дневной оборот. Если это не текущий, а более дальний —
+    переходим со СЛЕДУЮЩЕГО торгового дня (решение принимается по уже
+    закрытому дню d: иначе это заглядывание в будущее на один день).
+
+    Почему максимум по всем, а не сравнение «следующий против текущего»
+    (так было до 2026-09-02): парное сравнение срабатывает на шуме, когда
+    история разрежена. На загрузке 2020 года у SBERF дальние контракты
+    торговались единичными сделками, парное правило переключалось на них
+    в первый же день случайного превышения, а назад оно не откатывается —
+    указатель уезжал по цепочке вперёд, и весь 2022+ год ряд состоял из
+    ДАЛЬНИХ контрактов. Максимум по обороту так не обманывается: пока
+    ликвидность в ближнем, максимум остаётся на нём.
 
     Дополнительно — принудительный переход, если у текущего контракта
     кончились свечи или наступила дата экспирации: держать истёкший
@@ -64,32 +73,47 @@ def build_roll_schedule_by_volume(
     Возвращает [(дата начала владения, тикер), ...] по возрастанию даты.
     """
     order = list(order)
+    pos = {t: i for i, t in enumerate(order)}
     all_days = sorted({d for by_d in daily_volume.values() for d in by_d})
     if not all_days:
         return []
 
-    idx = 0
-    while idx < len(order) - 1 and not daily_volume.get(order[idx]):
-        idx += 1
-    schedule = [(all_days[0], order[idx])]
-    pending: Optional[int] = None
+    def most_traded(d):
+        """Самый ликвидный ЖИВОЙ контракт этого дня (или None)."""
+        best, best_v = None, 0.0
+        for t in order:
+            if expiration[t] < d:
+                continue
+            v = daily_volume.get(t, {}).get(d, 0.0)
+            if v > best_v:
+                best, best_v = t, v
+        return best
+
+    leader = {d: most_traded(d) for d in all_days}
+
+    cur = leader[all_days[0]] or order[0]
+    schedule = [(all_days[0], cur)]
+    pending = None
+    prev_leader = None
 
     for d in all_days:
-        cur = order[idx]
         if pending is not None:
-            idx = pending
+            cur = pending
             pending = None
-            schedule.append((d, order[idx]))
-            cur = order[idx]
-        if idx + 1 >= len(order):
-            continue
-        nxt = order[idx + 1]
-        # принудительно: контракт истекает или кончились данные
+            schedule.append((d, cur))
+        lead = leader[d]
         forced = expiration[cur] <= d or last_candle_date.get(cur, d) <= d
-        v_cur = daily_volume.get(cur, {}).get(d, 0.0)
-        v_nxt = daily_volume.get(nxt, {}).get(d, 0.0)
-        if forced or (v_nxt > v_cur and v_nxt > 0):
-            pending = idx + 1
+        if forced:
+            # текущий истёк или кончились данные — идём вперёд по цепочке
+            nxt = lead if (lead and pos[lead] > pos[cur]) else (
+                order[pos[cur] + 1] if pos[cur] + 1 < len(order) else None)
+            if nxt is not None:
+                pending = nxt
+        elif (lead is not None and pos[lead] > pos[cur] and lead == prev_leader):
+            # ликвидность ушла в более дальний контракт и держится там
+            # второй день подряд (однодневный всплеск переходом не считаем)
+            pending = lead
+        prev_leader = lead
     return schedule
 
 
